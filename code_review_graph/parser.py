@@ -123,6 +123,7 @@ EXTENSION_TO_LANGUAGE: dict[str, str] = {
     ".exs": "elixir",
     ".ipynb": "notebook",
     ".zig": "zig",
+    ".gleam": "gleam",
     ".ps1": "powershell",
     ".psm1": "powershell",
     ".psd1": "powershell",
@@ -224,7 +225,14 @@ _CLASS_TYPES: dict[str, list[str]] = {
     # Nix: attrset bindings aren't "classes"; dispatched via
     # _extract_nix_constructs.
     "nix": [],
-    "zig": ["container_declaration"],
+    # Zig: structs/enums/unions are ``VarDecl`` bindings whose value is a
+    # ``ContainerDecl``. Dispatched via _extract_zig_constructs because the
+    # grammar wraps every top-level item in a ``Decl`` and the type names are
+    # PascalCase (FnProto/VarDecl/ContainerDecl), not the snake_case the
+    # generic tables assume.
+    "zig": [],
+    # Gleam: custom types (``type Foo { .. }``) and aliases model as classes.
+    "gleam": ["type_definition", "type_alias"],
     "powershell": ["class_statement"],
     "julia": [
         "struct_definition", "abstract_definition", "module_definition",
@@ -282,7 +290,14 @@ _FUNCTION_TYPES: dict[str, list[str]] = {
     # Nix: `attrpath = expr;` bindings become Function nodes —
     # handled in _extract_nix_constructs.
     "nix": [],
-    "zig": ["fn_proto", "fn_decl"],
+    # Zig: ``fn name(..) RetT { .. }`` parses as ``Decl > FnProto + Block``
+    # (the body Block is a sibling of FnProto, not a child), so the generic
+    # "def node contains its body" path mis-attributes body calls. Handled
+    # in _extract_zig_constructs.
+    "zig": [],
+    # Gleam: a ``function`` node contains its ``block`` body as a child, so
+    # the generic machinery handles it directly.
+    "gleam": ["function"],
     "powershell": ["function_statement"],
     # Julia: short-form functions `f(x) = expr` parse as `assignment` nodes
     # (not a dedicated definition node) and are handled in
@@ -334,9 +349,11 @@ _IMPORT_TYPES: dict[str, list[str]] = {
     # `inputs.*.url` strings become IMPORTS_FROM edges —
     # handled in _extract_nix_constructs.
     "nix": [],
-    # Zig: @import("...") is a builtin_call_expr — handled
-    # generically via call types below.
+    # Zig: ``const x = @import("...")`` — the @import builtin lives inside a
+    # VarDecl; IMPORTS_FROM edges are emitted from _extract_zig_constructs.
     "zig": [],
+    # Gleam: ``import gleam/io`` — the ``module`` child holds the path.
+    "gleam": ["import"],
     "powershell": [],
     # Julia: import/using are import_statement nodes.
     "julia": ["import_statement", "using_statement"],
@@ -391,7 +408,13 @@ _CALL_TYPES: dict[str, list[str]] = {
     # Nix: function application is ubiquitous; only import/callPackage
     # produce edges, in _extract_nix_constructs.
     "nix": [],
-    "zig": ["call_expression", "builtin_call_expr"],
+    # Zig has no call_expression node: a call is a ``FnCallArguments`` node
+    # whose immediately-preceding named sibling is the callee identifier
+    # (``add(..)`` → IDENTIFIER, ``@import(..)`` → BUILTINIDENTIFIER which
+    # _get_call_name filters out). See _get_call_name's zig branch.
+    "zig": ["FnCallArguments"],
+    # Gleam: ``foo(..)`` and ``mod.foo(..)`` both parse as ``function_call``.
+    "gleam": ["function_call"],
     "powershell": ["command_expression"],
     "julia": [
         "call_expression",
@@ -2259,6 +2282,20 @@ class CodeParser:
             ):
                 continue
 
+            # --- Zig-specific constructs ---
+            # The tree-sitter-zig grammar wraps every top-level item in a
+            # ``Decl`` and uses PascalCase node types. Functions
+            # (``Decl > FnProto + Block``), containers
+            # (``Decl > VarDecl > .. > ContainerDecl``), ``@import`` bindings,
+            # and ``TestDecl`` blocks don't fit the generic type tables, so
+            # they're handled here. See: Zig support drift (PascalCase grammar).
+            if language == "zig" and self._extract_zig_constructs(
+                child, node_type, source, language, file_path,
+                nodes, edges, enclosing_class, enclosing_func,
+                import_map, defined_names, _depth,
+            ):
+                continue
+
             # --- Dart call detection (see #87) ---
             # tree-sitter-dart does not wrap calls in a single
             # ``call_expression`` node; instead the pattern is
@@ -3370,6 +3407,278 @@ class CodeParser:
             return False
 
         return False
+
+    # ------------------------------------------------------------------
+    # Zig-specific helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _zig_first_identifier(node) -> Optional[str]:
+        """Return the text of the first ``IDENTIFIER`` child of ``node``."""
+        for child in node.children:
+            if child.type == "IDENTIFIER":
+                return child.text.decode("utf-8", errors="replace")
+        return None
+
+    @staticmethod
+    def _zig_var_value_expr(var_decl):
+        """Return the value expression of a Zig ``VarDecl``.
+
+        ``const Name = <expr>`` parses as ``VarDecl > IDENTIFIER + <expr>``;
+        the value is wrapped in ``ErrorUnionExpr > SuffixExpr``. Returns the
+        innermost ``SuffixExpr`` (or the value node itself if the wrappers
+        are absent), or ``None`` when there is no value.
+        """
+        value = None
+        for child in var_decl.children:
+            if child.type == "ErrorUnionExpr":
+                value = child
+                break
+        if value is None:
+            return None
+        # Unwrap a single ErrorUnionExpr > SuffixExpr chain.
+        for child in value.children:
+            if child.type == "SuffixExpr":
+                return child
+        return value
+
+    def _extract_zig_constructs(
+        self,
+        child,
+        node_type: str,
+        source: bytes,
+        language: str,
+        file_path: str,
+        nodes: list[NodeInfo],
+        edges: list[EdgeInfo],
+        enclosing_class: Optional[str],
+        enclosing_func: Optional[str],
+        import_map: Optional[dict[str, str]],
+        defined_names: Optional[set[str]],
+        _depth: int,
+    ) -> bool:
+        """Handle Zig constructs the generic type tables can't cover.
+
+        The tree-sitter-zig grammar emits PascalCase node types and wraps every
+        top-level item in a ``Decl``:
+
+        * ``Decl > FnProto + Block`` — a function (the body ``Block`` is a
+          *sibling* of ``FnProto``, so the generic recursion would mis-attribute
+          body calls; we recurse into the ``Block`` with the function as the
+          enclosing scope).
+        * ``Decl > VarDecl > .. > ContainerDecl`` — a struct/enum/union, modeled
+          as a Class; methods inside it are again ``Decl > FnProto`` and recurse
+          with the container as the enclosing class.
+        * ``Decl > VarDecl`` whose value is ``@import("..")`` — an IMPORTS_FROM
+          edge.
+        * ``TestDecl`` — a test block (named from its string literal).
+
+        Returns True if the child was fully handled and should be skipped by the
+        main dispatch loop. Plain ``const``/``var`` bindings return False so the
+        generic recursion still records calls in their initializers.
+        """
+        if node_type == "TestDecl":
+            name: Optional[str] = None
+            for sub in child.children:
+                if sub.type == "STRINGLITERALSINGLE":
+                    name = sub.text.decode("utf-8", errors="replace").strip('"')
+                    break
+                if sub.type == "IDENTIFIER":
+                    name = sub.text.decode("utf-8", errors="replace")
+            line_no = child.start_point[0] + 1
+            if not name:
+                name = f"test@L{line_no}"
+            qualified = self._qualify(name, file_path, enclosing_class)
+            nodes.append(NodeInfo(
+                kind="Test",
+                name=name,
+                file_path=file_path,
+                line_start=line_no,
+                line_end=child.end_point[0] + 1,
+                language=language,
+                parent_name=enclosing_class,
+                is_test=True,
+            ))
+            container = (
+                self._qualify(enclosing_class, file_path, None)
+                if enclosing_class
+                else file_path
+            )
+            edges.append(EdgeInfo(
+                kind="CONTAINS",
+                source=container,
+                target=qualified,
+                file_path=file_path,
+                line=line_no,
+            ))
+            for sub in child.children:
+                if sub.type == "Block":
+                    self._extract_from_tree(
+                        sub, source, language, file_path, nodes, edges,
+                        enclosing_class=enclosing_class, enclosing_func=name,
+                        import_map=import_map, defined_names=defined_names,
+                        _depth=_depth + 1,
+                    )
+            return True
+
+        if node_type != "Decl":
+            return False
+
+        fn_proto = None
+        block = None
+        var_decl = None
+        for sub in child.children:
+            if sub.type == "FnProto":
+                fn_proto = sub
+            elif sub.type == "Block":
+                block = sub
+            elif sub.type == "VarDecl":
+                var_decl = sub
+
+        # --- Functions: Decl > FnProto + Block ---
+        if fn_proto is not None:
+            name = self._zig_first_identifier(fn_proto)
+            if not name:
+                return False
+            is_test = _is_test_function(name, file_path, ())
+            kind = "Test" if is_test else "Function"
+            params = None
+            ret_type = None
+            for sub in fn_proto.children:
+                if sub.type == "ParamDeclList":
+                    params = sub.text.decode("utf-8", errors="replace")
+                elif sub.type == "ErrorUnionExpr":
+                    # The lone ErrorUnionExpr child of FnProto is the return
+                    # type (parameter types live inside ParamDeclList).
+                    ret_type = sub.text.decode("utf-8", errors="replace")
+            qualified = self._qualify(name, file_path, enclosing_class)
+            nodes.append(NodeInfo(
+                kind=kind,
+                name=name,
+                file_path=file_path,
+                line_start=child.start_point[0] + 1,
+                line_end=child.end_point[0] + 1,
+                language=language,
+                parent_name=enclosing_class,
+                params=params,
+                return_type=ret_type,
+                is_test=is_test,
+            ))
+            container = (
+                self._qualify(enclosing_class, file_path, None)
+                if enclosing_class
+                else file_path
+            )
+            edges.append(EdgeInfo(
+                kind="CONTAINS",
+                source=container,
+                target=qualified,
+                file_path=file_path,
+                line=child.start_point[0] + 1,
+            ))
+            # Recurse into the body only, with this function as the enclosing
+            # scope, so CALLS edges attribute to it (the body is a sibling of
+            # FnProto, not a child).
+            if block is not None:
+                self._extract_from_tree(
+                    block, source, language, file_path, nodes, edges,
+                    enclosing_class=enclosing_class, enclosing_func=name,
+                    import_map=import_map, defined_names=defined_names,
+                    _depth=_depth + 1,
+                )
+            return True
+
+        # --- Containers / imports: Decl > VarDecl ---
+        if var_decl is not None:
+            value = self._zig_var_value_expr(var_decl)
+            name = self._zig_first_identifier(var_decl)
+
+            # Container declaration (struct / enum / union) -> Class node.
+            container_decl = None
+            if value is not None:
+                for sub in value.children:
+                    if sub.type == "ContainerDecl":
+                        container_decl = sub
+                        break
+            if container_decl is not None and name:
+                zig_kind = None
+                for sub in container_decl.children:
+                    if sub.type == "ContainerDeclType":
+                        zig_kind = sub.text.decode(
+                            "utf-8", errors="replace",
+                        ).split("(")[0].strip()
+                        break
+                extra = {"zig_kind": zig_kind} if zig_kind else {}
+                qualified = self._qualify(name, file_path, enclosing_class)
+                nodes.append(NodeInfo(
+                    kind="Class",
+                    name=name,
+                    file_path=file_path,
+                    line_start=child.start_point[0] + 1,
+                    line_end=child.end_point[0] + 1,
+                    language=language,
+                    parent_name=enclosing_class,
+                    extra=extra,
+                ))
+                edges.append(EdgeInfo(
+                    kind="CONTAINS",
+                    source=file_path,
+                    target=qualified,
+                    file_path=file_path,
+                    line=child.start_point[0] + 1,
+                ))
+                # Recurse into the container body so methods
+                # (``Decl > FnProto``) attach to this type.
+                self._extract_from_tree(
+                    container_decl, source, language, file_path, nodes, edges,
+                    enclosing_class=name, enclosing_func=None,
+                    import_map=import_map, defined_names=defined_names,
+                    _depth=_depth + 1,
+                )
+                return True
+
+            # @import("path") binding -> IMPORTS_FROM edge.
+            if value is not None and value.children:
+                first = value.children[0]
+                if (
+                    first.type == "BUILTINIDENTIFIER"
+                    and first.text == b"@import"
+                ):
+                    import_path = None
+                    for sub in value.children:
+                        if sub.type == "FnCallArguments":
+                            for arg in sub.children:
+                                lit = self._zig_find_string_literal(arg)
+                                if lit:
+                                    import_path = lit
+                                    break
+                    if import_path:
+                        resolved = self._resolve_module_to_file(
+                            import_path, file_path, language,
+                        )
+                        edges.append(EdgeInfo(
+                            kind="IMPORTS_FROM",
+                            source=file_path,
+                            target=resolved if resolved else import_path,
+                            file_path=file_path,
+                            line=child.start_point[0] + 1,
+                        ))
+                        return True
+
+        # Plain const/var or anything else: let the generic recursion run so
+        # calls in initializers are still recorded.
+        return False
+
+    @staticmethod
+    def _zig_find_string_literal(node) -> Optional[str]:
+        """Return the first string literal text (quotes stripped) under node."""
+        if node.type == "STRINGLITERALSINGLE":
+            return node.text.decode("utf-8", errors="replace").strip('"')
+        for child in node.children:
+            found = CodeParser._zig_find_string_literal(child)
+            if found is not None:
+                return found
+        return None
 
     # ------------------------------------------------------------------
     # Lua-specific helpers
@@ -5663,6 +5972,18 @@ class CodeParser:
 
     def _get_name(self, node, language: str, kind: str) -> Optional[str]:
         """Extract the name from a class/function definition node."""
+        # Gleam: custom types and aliases hold the name in
+        # ``type_name > type_identifier``. ``function`` nodes use a plain
+        # ``identifier`` child and fall through to the generic loop.
+        if language == "gleam" and node.type in (
+            "type_definition", "type_alias",
+        ):
+            for child in node.children:
+                if child.type == "type_name":
+                    for sub in child.children:
+                        if sub.type == "type_identifier":
+                            return sub.text.decode("utf-8", errors="replace")
+            return None
         # Dart: function_signature has a return-type node before the identifier;
         # search only for 'identifier' to avoid returning the return type name.
         if language == "dart" and node.type == "function_signature":
@@ -5972,6 +6293,12 @@ class CodeParser:
 
     def _get_params(self, node, language: str, source: bytes) -> Optional[str]:
         """Extract parameter list as a string."""
+        # Gleam: ``function`` / ``anonymous_function`` use ``function_parameters``.
+        if language == "gleam":
+            for child in node.children:
+                if child.type == "function_parameters":
+                    return child.text.decode("utf-8", errors="replace")
+            return None
         for child in node.children:
             param_types = (
                 "parameters", "formal_parameters",
@@ -6336,6 +6663,13 @@ class CodeParser:
                     txt = child.text.decode("utf-8", errors="replace")
                     if txt and txt != "extends":
                         imports.append(txt)
+        elif language == "gleam":
+            # ``import gleam/io`` / ``import gleam/list.{map}`` / ``.. as str``
+            # — the ``module`` child holds the slash-separated module path.
+            for child in node.children:
+                if child.type == "module":
+                    imports.append(child.text.decode("utf-8", errors="replace"))
+                    break
         else:
             # Fallback: just record the text
             imports.append(text)
@@ -6344,10 +6678,30 @@ class CodeParser:
 
     def _get_call_name(self, node, language: str, source: bytes) -> Optional[str]:
         """Extract the function/method name being called."""
+        # Zig: a call is a ``FnCallArguments`` node; the callee is its
+        # immediately-preceding named sibling. ``add(..)`` → IDENTIFIER (a real
+        # call); ``@import(..)`` / ``@as(..)`` → BUILTINIDENTIFIER (a compiler
+        # builtin, not a user call) — return None so no edge is emitted.
+        if language == "zig" and node.type == "FnCallArguments":
+            prev = node.prev_named_sibling
+            if prev is not None and prev.type == "IDENTIFIER":
+                return prev.text.decode("utf-8", errors="replace")
+            return None
+
         if not node.children:
             return None
 
         first = node.children[0]
+
+        # Gleam: ``mod.fn(..)`` parses as ``function_call > field_access(..)``;
+        # the called label is the rightmost ``label`` child. Plain ``fn(..)``
+        # has an ``identifier`` first child and falls through to the generic
+        # path below.
+        if language == "gleam" and first.type == "field_access":
+            for sub in reversed(first.children):
+                if sub.type == "label":
+                    return sub.text.decode("utf-8", errors="replace")
+            return None
 
         # Julia macrocall: ``@test expr`` — name is inside
         # ``macro_identifier > identifier``. Prefix with ``@`` to distinguish

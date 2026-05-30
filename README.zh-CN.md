@@ -111,7 +111,7 @@ Build the code review graph for this project
   <img src="diagrams/diagram9_language_coverage.png" alt="按类别组织的语言覆盖：Web、后端、系统、移动端、脚本，外加 Jupyter/Databricks 笔记本支持" width="90%" />
 </p>
 
-解析器支持覆盖当前解析面中的函数、类、导入、调用点、继承和测试检测：能用 Tree-sitter 的地方使用 Tree-sitter，需要时使用有针对性的回退解析。支持范围包括 Python、JavaScript/TypeScript/TSX、Go、Rust、Java、C/C++、C#、Ruby、Kotlin、Swift、PHP、Scala、Solidity、Dart、R、Perl、Lua/Luau、Objective-C、shell 脚本、Elixir、Zig、PowerShell、Julia、ReScript、GDScript、Nix、Verilog/SystemVerilog、SQL、Vue/Svelte 单文件组件、按 TypeScript 解析的 Astro 文件、Jupyter/Databricks 笔记本（`.ipynb`）和 Perl XS 文件（`.xs`）。
+解析器支持覆盖当前解析面中的函数、类、导入、调用点、继承和测试检测：能用 Tree-sitter 的地方使用 Tree-sitter，需要时使用有针对性的回退解析。支持范围包括 Python、JavaScript/TypeScript/TSX、Go、Rust、Java、C/C++、C#、Ruby、Kotlin、Swift、PHP、Scala、Solidity、Dart、R、Perl、Lua/Luau、Objective-C、shell 脚本、Elixir、Zig、Gleam、PowerShell、Julia、ReScript、GDScript、Nix、Verilog/SystemVerilog、SQL、Vue/Svelte 单文件组件、按 TypeScript 解析的 Astro 文件、Jupyter/Databricks 笔记本（`.ipynb`）和 Perl XS 文件（`.xs`）。
 
 ---
 
@@ -130,7 +130,7 @@ Build the code review graph for this project
 | 功能 | 说明 |
 |------|------|
 | **增量更新** | 仅重新解析变更文件，后续更新不到 2 秒完成 |
-| **广泛语言覆盖 + 笔记本** | Python, JavaScript/TypeScript/TSX, Go, Rust, Java, C/C++, C#, Ruby, Kotlin, Swift, PHP, Scala, Solidity, Dart, R, Perl, Lua/Luau, Objective-C, shell, Elixir, Zig, PowerShell, Julia, ReScript, GDScript, Nix, Verilog/SystemVerilog, SQL, Vue/Svelte SFCs, Astro files parsed as TypeScript, Jupyter/Databricks (.ipynb) |
+| **广泛语言覆盖 + 笔记本** | Python, JavaScript/TypeScript/TSX, Go, Rust, Java, C/C++, C#, Ruby, Kotlin, Swift, PHP, Scala, Solidity, Dart, R, Perl, Lua/Luau, Objective-C, shell, Elixir, Zig, Gleam, PowerShell, Julia, ReScript, GDScript, Nix, Verilog/SystemVerilog, SQL, Vue/Svelte SFCs, Astro files parsed as TypeScript, Jupyter/Databricks (.ipynb) |
 | **影响半径分析** | 展示某次变更可能影响的函数、类和文件 |
 | **自动更新钩子** | 每次文件编辑和 git 提交时自动更新图，无需手动干预 |
 | **语义搜索** | 可选的向量嵌入，支持 sentence-transformers、Google Gemini、MiniMax，或任何 OpenAI 兼容端点（真实 OpenAI、Azure、new-api、LiteLLM、vLLM、LocalAI） |

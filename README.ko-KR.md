@@ -111,7 +111,7 @@ Build the code review graph for this project
   <img src="diagrams/diagram9_language_coverage.png" alt="카테고리별 언어 지원: 웹, 백엔드, 시스템, 모바일, 스크립팅, 그리고 Jupyter/Databricks 노트북 지원" width="90%" />
 </p>
 
-현재 파서가 지원하는 범위에서 함수, 클래스, import, 호출 위치, 상속, 테스트 감지를 추출합니다. 가능한 경우 Tree-sitter를 사용하고 필요한 곳에서는 대상별 fallback 파서를 사용합니다. 지원 범위에는 Python, JavaScript/TypeScript/TSX, Go, Rust, Java, C/C++, C#, Ruby, Kotlin, Swift, PHP, Scala, Solidity, Dart, R, Perl, Lua/Luau, Objective-C, shell scripts, Elixir, Zig, PowerShell, Julia, ReScript, GDScript, Nix, Verilog/SystemVerilog, SQL, Vue/Svelte SFC, TypeScript 파서로 처리되는 Astro 파일, Jupyter/Databricks 노트북(`.ipynb`), Perl XS 파일(`.xs`)이 포함됩니다.
+현재 파서가 지원하는 범위에서 함수, 클래스, import, 호출 위치, 상속, 테스트 감지를 추출합니다. 가능한 경우 Tree-sitter를 사용하고 필요한 곳에서는 대상별 fallback 파서를 사용합니다. 지원 범위에는 Python, JavaScript/TypeScript/TSX, Go, Rust, Java, C/C++, C#, Ruby, Kotlin, Swift, PHP, Scala, Solidity, Dart, R, Perl, Lua/Luau, Objective-C, shell scripts, Elixir, Zig, Gleam, PowerShell, Julia, ReScript, GDScript, Nix, Verilog/SystemVerilog, SQL, Vue/Svelte SFC, TypeScript 파서로 처리되는 Astro 파일, Jupyter/Databricks 노트북(`.ipynb`), Perl XS 파일(`.xs`)이 포함됩니다.
 
 ---
 
@@ -132,7 +132,7 @@ Build the code review graph for this project
 | 기능 | 세부 사항 |
 |------|-----------|
 | **점진적 업데이트** | 변경된 파일만 다시 파싱합니다. 이후 업데이트는 2초 이내에 완료됩니다. |
-| **폭넓은 언어 지원 + 노트북** | Python, JavaScript/TypeScript/TSX, Go, Rust, Java, C/C++, C#, Ruby, Kotlin, Swift, PHP, Scala, Solidity, Dart, R, Perl, Lua/Luau, Objective-C, shell, Elixir, Zig, PowerShell, Julia, ReScript, GDScript, Nix, Verilog/SystemVerilog, SQL, Vue/Svelte SFCs, Astro files parsed as TypeScript, Jupyter/Databricks (.ipynb) |
+| **폭넓은 언어 지원 + 노트북** | Python, JavaScript/TypeScript/TSX, Go, Rust, Java, C/C++, C#, Ruby, Kotlin, Swift, PHP, Scala, Solidity, Dart, R, Perl, Lua/Luau, Objective-C, shell, Elixir, Zig, Gleam, PowerShell, Julia, ReScript, GDScript, Nix, Verilog/SystemVerilog, SQL, Vue/Svelte SFCs, Astro files parsed as TypeScript, Jupyter/Databricks (.ipynb) |
 | **영향 범위 분석** | 변경에 의해 영향 받을 가능성이 있는 함수, 클래스, 파일을 보여줍니다 |
 | **자동 업데이트 훅** | 수동 개입 없이 파일 편집 및 git 커밋마다 그래프가 업데이트됩니다 |
 | **시맨틱 검색** | sentence-transformers, Google Gemini, MiniMax, 또는 OpenAI 호환 엔드포인트(실제 OpenAI, Azure, new-api, LiteLLM, vLLM, LocalAI)를 통한 선택적 벡터 임베딩 |

@@ -111,7 +111,7 @@ Build the code review graph for this project
   <img src="diagrams/diagram9_language_coverage.png" alt="カテゴリ別の言語サポート：Web、バックエンド、システム、モバイル、スクリプト、さらにJupyter/Databricksノートブック対応" width="90%" />
 </p>
 
-現在のパーサーが対応する範囲で、関数、クラス、インポート、呼び出し箇所、継承、テスト検出を抽出します。利用できる場合はTree-sitterを使い、必要な箇所では専用のフォールバック解析を使います。対応範囲には Python、JavaScript/TypeScript/TSX、Go、Rust、Java、C/C++、C#、Ruby、Kotlin、Swift、PHP、Scala、Solidity、Dart、R、Perl、Lua/Luau、Objective-C、shell scripts、Elixir、Zig、PowerShell、Julia、ReScript、GDScript、Nix、Verilog/SystemVerilog、SQL、Vue/Svelte SFC、TypeScriptパーサーで扱うAstroファイル、Jupyter/Databricksノートブック（`.ipynb`）、Perl XSファイル（`.xs`）が含まれます。
+現在のパーサーが対応する範囲で、関数、クラス、インポート、呼び出し箇所、継承、テスト検出を抽出します。利用できる場合はTree-sitterを使い、必要な箇所では専用のフォールバック解析を使います。対応範囲には Python、JavaScript/TypeScript/TSX、Go、Rust、Java、C/C++、C#、Ruby、Kotlin、Swift、PHP、Scala、Solidity、Dart、R、Perl、Lua/Luau、Objective-C、shell scripts、Elixir、Zig、Gleam、PowerShell、Julia、ReScript、GDScript、Nix、Verilog/SystemVerilog、SQL、Vue/Svelte SFC、TypeScriptパーサーで扱うAstroファイル、Jupyter/Databricksノートブック（`.ipynb`）、Perl XSファイル（`.xs`）が含まれます。
 
 ---
 
@@ -132,7 +132,7 @@ Build the code review graph for this project
 | 機能 | 詳細 |
 |------|------|
 | **インクリメンタル更新** | 変更されたファイルのみを再解析。更新は2秒以内に完了。 |
-| **幅広い言語対応 + ノートブック** | Python, JavaScript/TypeScript/TSX, Go, Rust, Java, C/C++, C#, Ruby, Kotlin, Swift, PHP, Scala, Solidity, Dart, R, Perl, Lua/Luau, Objective-C, shell, Elixir, Zig, PowerShell, Julia, ReScript, GDScript, Nix, Verilog/SystemVerilog, SQL, Vue/Svelte SFCs, Astro files parsed as TypeScript, Jupyter/Databricks (.ipynb) |
+| **幅広い言語対応 + ノートブック** | Python, JavaScript/TypeScript/TSX, Go, Rust, Java, C/C++, C#, Ruby, Kotlin, Swift, PHP, Scala, Solidity, Dart, R, Perl, Lua/Luau, Objective-C, shell, Elixir, Zig, Gleam, PowerShell, Julia, ReScript, GDScript, Nix, Verilog/SystemVerilog, SQL, Vue/Svelte SFCs, Astro files parsed as TypeScript, Jupyter/Databricks (.ipynb) |
 | **影響範囲分析** | 変更によって影響を受ける可能性のある関数、クラス、ファイルを表示 |
 | **自動更新フック** | ファイル編集やgitコミットのたびに手動操作なしでグラフを更新 |
 | **セマンティック検索** | sentence-transformers、Google Gemini、MiniMax、またはOpenAI互換エンドポイント（本家OpenAI、Azure、new-api、LiteLLM、vLLM、LocalAI）によるオプションのベクトル埋め込み |

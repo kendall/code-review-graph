@@ -31,7 +31,14 @@ dependencies = [
     # See: #139, #195
     "fastmcp>=3.2.4",
     "tree-sitter>=0.23.0,<1",
-    "tree-sitter-language-pack>=0.3.0,<1",
+    # Pinned exactly: the bundled grammars' node-type names are
+    # version-specific (e.g. the Zig grammar emits PascalCase FnProto/
+    # ContainerDecl). An unpinned bump silently broke Zig parsing before. The
+    # fixture tests in tests/test_multilang.py are the real guard; this pin
+    # keeps the parser and the grammar it was written against in lockstep.
+    # Before raising it: re-dump grammar node types and re-run the multilang
+    # suite.
+    "tree-sitter-language-pack==0.13.0",
     "networkx>=3.2,<4",
     "watchdog>=4.0.0,<6",
     "tomli>=2.0.0,<3; python_version < '3.11'",

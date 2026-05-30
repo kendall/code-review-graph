@@ -2548,3 +2548,139 @@ class TestSQLParsing:
         targets = {e.target for e in imports}
         # active_orders view and archive procedure both reference orders/users
         assert "orders" in targets or "users" in targets
+
+
+class TestZigParsing:
+    def setup_method(self):
+        self.parser = CodeParser()
+        self.nodes, self.edges = self.parser.parse_file(FIXTURES / "sample.zig")
+
+    def test_detects_language(self):
+        assert self.parser.detect_language(Path("main.zig")) == "zig"
+
+    def test_file_node(self):
+        file_nodes = [n for n in self.nodes if n.kind == "File"]
+        assert len(file_nodes) == 1
+        assert file_nodes[0].language == "zig"
+
+    def test_finds_containers_with_kinds(self):
+        # struct / enum / union all model as Class, tagged via extra["zig_kind"].
+        by_name = {
+            n.name: n for n in self.nodes if n.kind == "Class"
+        }
+        assert set(by_name) == {"Color", "Point", "Shape"}
+        assert by_name["Color"].extra.get("zig_kind") == "enum"
+        assert by_name["Point"].extra.get("zig_kind") == "struct"
+        assert by_name["Shape"].extra.get("zig_kind") == "union"
+
+    def test_finds_top_level_functions(self):
+        top = {
+            n.name for n in self.nodes
+            if n.kind == "Function" and not n.parent_name
+        }
+        assert top == {"add", "helper", "main"}
+
+    def test_struct_method_attaches_to_type(self):
+        methods = {
+            (n.name, n.parent_name) for n in self.nodes
+            if n.kind == "Function" and n.parent_name
+        }
+        assert methods == {("dist", "Point")}
+
+    def test_method_contains_edge(self):
+        contains = {
+            (e.source.split("::")[-1], e.target.split("::")[-1])
+            for e in self.edges if e.kind == "CONTAINS"
+        }
+        assert ("Point", "Point.dist") in contains
+
+    def test_finds_test_decl(self):
+        tests = [n for n in self.nodes if n.kind == "Test"]
+        assert [t.name for t in tests] == ["add works"]
+        assert tests[0].is_test is True
+
+    def test_finds_imports(self):
+        targets = {e.target for e in self.edges if e.kind == "IMPORTS_FROM"}
+        assert targets == {"std", "builtin"}
+
+    def test_resolves_intra_file_and_method_calls(self):
+        calls = {
+            (e.source.split("::")[-1], e.target.split("::")[-1])
+            for e in self.edges if e.kind == "CALLS"
+        }
+        # top-level call, method call resolved to the type, and a call inside
+        # the test block.
+        assert ("helper", "add") in calls
+        assert ("helper", "Point.dist") in calls
+        assert ("main", "helper") in calls
+        assert ("add works", "add") in calls
+
+    def test_union_payload_produces_no_phantom_call(self):
+        # ``union(enum)`` must not be mistaken for a call. No CALLS edge should
+        # target "enum", and nothing should originate from a container node.
+        call_targets = {
+            e.target.split("::")[-1]
+            for e in self.edges if e.kind == "CALLS"
+        }
+        assert "enum" not in call_targets
+
+    def test_import_builtin_not_treated_as_call(self):
+        # ``@import`` is a builtin, not a user call — no CALLS edge for it.
+        call_targets = {
+            e.target.split("::")[-1]
+            for e in self.edges if e.kind == "CALLS"
+        }
+        assert "import" not in call_targets
+        assert "@import" not in call_targets
+
+
+class TestGleamParsing:
+    def setup_method(self):
+        self.parser = CodeParser()
+        self.nodes, self.edges = self.parser.parse_file(FIXTURES / "sample.gleam")
+
+    def test_detects_language(self):
+        assert self.parser.detect_language(Path("app.gleam")) == "gleam"
+
+    def test_file_node(self):
+        file_nodes = [n for n in self.nodes if n.kind == "File"]
+        assert len(file_nodes) == 1
+        assert file_nodes[0].language == "gleam"
+
+    def test_finds_custom_types_and_alias(self):
+        classes = {n.name for n in self.nodes if n.kind == "Class"}
+        assert classes == {"Color", "Point", "Wrapper", "Meters"}
+
+    def test_finds_functions(self):
+        funcs = {n.name for n in self.nodes if n.kind == "Function"}
+        # add_test matches the ``_test$`` pattern and is classified as a Test.
+        assert funcs == {"add", "helper", "main"}
+
+    def test_test_function_detected(self):
+        tests = {n.name for n in self.nodes if n.kind == "Test"}
+        assert "add_test" in tests
+
+    def test_finds_imports(self):
+        targets = {e.target for e in self.edges if e.kind == "IMPORTS_FROM"}
+        # plain, unqualified-list, and aliased imports all resolve to the
+        # slash-separated module path.
+        assert targets == {"gleam/io", "gleam/list", "gleam/string"}
+
+    def test_resolves_local_and_qualified_calls(self):
+        calls = {
+            (e.source.split("::")[-1], e.target.split("::")[-1])
+            for e in self.edges if e.kind == "CALLS"
+        }
+        # local call resolved to the file-local def
+        assert ("helper", "add") in calls
+        assert ("main", "helper") in calls
+        # qualified calls keep the called label (io.println, list.map)
+        assert ("helper", "println") in calls
+        assert ("helper", "map") in calls
+
+    def test_contains_edges(self):
+        targets = {
+            e.target.split("::")[-1]
+            for e in self.edges if e.kind == "CONTAINS"
+        }
+        assert {"Color", "Point", "Wrapper", "Meters", "add", "helper", "main"} <= targets

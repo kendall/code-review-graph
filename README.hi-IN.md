@@ -111,7 +111,7 @@ Build the code review graph for this project
   <img src="diagrams/diagram9_language_coverage.png" alt="श्रेणी के अनुसार भाषा सपोर्ट: वेब, बैकेंड, सिस्टम्स, मोबाइल, स्क्रिप्टिंग, और Jupyter/Databricks नोटबुक सपोर्ट" width="90%" />
 </p>
 
-मौजूदा पार्सर जिन सतहों को सपोर्ट करता है, उनमें फ़ंक्शन, क्लासेज़, इम्पोर्ट्स, कॉल साइट्स, इनहेरिटेंस, और टेस्ट डिटेक्शन के लिए स्ट्रक्चरल एक्सट्रैक्शन मिलता है। जहाँ उपलब्ध हो वहाँ Tree-sitter इस्तेमाल होता है, और ज़रूरत पड़ने पर targeted fallback parsers इस्तेमाल होते हैं। सपोर्ट में Python, JavaScript/TypeScript/TSX, Go, Rust, Java, C/C++, C#, Ruby, Kotlin, Swift, PHP, Scala, Solidity, Dart, R, Perl, Lua/Luau, Objective-C, shell scripts, Elixir, Zig, PowerShell, Julia, ReScript, GDScript, Nix, Verilog/SystemVerilog, SQL, Vue/Svelte SFCs, TypeScript parser से parse होने वाली Astro files, Jupyter/Databricks नोटबुक (`.ipynb`), और Perl XS फ़ाइलें (`.xs`) शामिल हैं।
+मौजूदा पार्सर जिन सतहों को सपोर्ट करता है, उनमें फ़ंक्शन, क्लासेज़, इम्पोर्ट्स, कॉल साइट्स, इनहेरिटेंस, और टेस्ट डिटेक्शन के लिए स्ट्रक्चरल एक्सट्रैक्शन मिलता है। जहाँ उपलब्ध हो वहाँ Tree-sitter इस्तेमाल होता है, और ज़रूरत पड़ने पर targeted fallback parsers इस्तेमाल होते हैं। सपोर्ट में Python, JavaScript/TypeScript/TSX, Go, Rust, Java, C/C++, C#, Ruby, Kotlin, Swift, PHP, Scala, Solidity, Dart, R, Perl, Lua/Luau, Objective-C, shell scripts, Elixir, Zig, Gleam, PowerShell, Julia, ReScript, GDScript, Nix, Verilog/SystemVerilog, SQL, Vue/Svelte SFCs, TypeScript parser से parse होने वाली Astro files, Jupyter/Databricks नोटबुक (`.ipynb`), और Perl XS फ़ाइलें (`.xs`) शामिल हैं।
 
 ---
 
@@ -130,7 +130,7 @@ Build the code review graph for this project
 | विशेषता | विवरण |
 |---------|--------|
 | **इंक्रीमेंटल अपडेट** | केवल बदली हुई फ़ाइलों को री-पार्स करता है। बाद के अपडेट 2 सेकंड से कम में पूरे होते हैं। |
-| **व्यापक भाषा सपोर्ट + नोटबुक** | Python, JavaScript/TypeScript/TSX, Go, Rust, Java, C/C++, C#, Ruby, Kotlin, Swift, PHP, Scala, Solidity, Dart, R, Perl, Lua/Luau, Objective-C, shell, Elixir, Zig, PowerShell, Julia, ReScript, GDScript, Nix, Verilog/SystemVerilog, SQL, Vue/Svelte SFCs, Astro files parsed as TypeScript, Jupyter/Databricks (.ipynb) |
+| **व्यापक भाषा सपोर्ट + नोटबुक** | Python, JavaScript/TypeScript/TSX, Go, Rust, Java, C/C++, C#, Ruby, Kotlin, Swift, PHP, Scala, Solidity, Dart, R, Perl, Lua/Luau, Objective-C, shell, Elixir, Zig, Gleam, PowerShell, Julia, ReScript, GDScript, Nix, Verilog/SystemVerilog, SQL, Vue/Svelte SFCs, Astro files parsed as TypeScript, Jupyter/Databricks (.ipynb) |
 | **ब्लास्ट-रेडियस विश्लेषण** | दिखाता है कि किसी भी बदलाव से कौन से फ़ंक्शन, क्लासेज़, और फ़ाइलें प्रभावित होती हैं |
 | **ऑटो-अपडेट हुक्स** | बिना मैन्युअल हस्तक्षेप के हर फ़ाइल एडिट और git कमिट पर ग्राफ अपडेट होता है |
 | **सिमेंटिक सर्च** | sentence-transformers, Google Gemini, MiniMax, या किसी भी OpenAI-compatible एंडपॉइंट (असली OpenAI, Azure, new-api, LiteLLM, vLLM, LocalAI) के ज़रिए वैकल्पिक वेक्टर एम्बेडिंग |

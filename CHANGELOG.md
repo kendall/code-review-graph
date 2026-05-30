@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+### Added — Language support
+
+- **Gleam parsing.** Custom types/records and aliases (modeled as Class nodes),
+  functions, `import` edges (plain, unqualified-list, and aliased), and
+  qualified/local call resolution. `*_test` functions are detected as tests.
+- **Zig parsing rebuilt.** The bundled tree-sitter-zig grammar had drifted to
+  PascalCase node types (`FnProto`, `ContainerDecl`, …), which the old
+  snake_case mappings no longer matched — Zig files extracted almost nothing.
+  A dedicated handler now extracts functions, structs/enums/unions (tagged via
+  `extra["zig_kind"]`), struct methods (attached to their type), `@import`
+  edges, `test` blocks, and intra-file + method call edges.
+
+### Changed
+
+- **Pinned `tree-sitter-language-pack==0.13.0`.** The bundled grammars' node
+  names are version-specific; an unpinned bump silently broke Zig before.
+  Fixture tests for both languages now guard against future drift.
+
 ## [2.3.5] - 2026-05-25
 
 **Real-time token savings, visible to humans.** The estimated context-savings
