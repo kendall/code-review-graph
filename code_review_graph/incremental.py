@@ -100,6 +100,11 @@ def _run_temporal_resolver(store: GraphStore) -> Optional[dict]:
 # inside monorepos. See: #91
 DEFAULT_IGNORE_PATTERNS = [
     ".code-review-graph/**",
+    # Nested git worktrees are a separate repo, watched/built on their own —
+    # walking into them here duplicates every file per worktree and can
+    # exhaust the OS inotify watch quota when many worktrees exist.
+    ".claude/worktrees/**",
+    ".codex/worktrees/**",
     "node_modules/**",
     ".git/**",
     ".svn/**",

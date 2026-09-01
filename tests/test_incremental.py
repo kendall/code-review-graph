@@ -242,6 +242,23 @@ class TestIgnorePatterns:
         assert _should_ignore("coverage/lcov.info", patterns)
         assert _should_ignore(".cache/webpack/index.pack", patterns)
 
+    def test_should_ignore_nested_worktrees(self):
+        """Nested git worktrees under the repo root are a separate,
+        separately-watched repo — walking into them here duplicates every
+        file per worktree and can exhaust the inotify watch quota."""
+        from code_review_graph.incremental import DEFAULT_IGNORE_PATTERNS
+
+        patterns = DEFAULT_IGNORE_PATTERNS
+        assert _should_ignore(
+            ".claude/worktrees/some-slug/src/main.py", patterns
+        )
+        assert _should_ignore(
+            ".codex/worktrees/codex-wb-20260901-000000-1/zig/core.zig", patterns
+        )
+        # Sibling paths that merely share a prefix must still be watched.
+        assert not _should_ignore(".claude/worktrees.md", patterns)
+        assert not _should_ignore("src/worktrees/helper.py", patterns)
+
 
 class TestDataDir:
     """Tests for get_data_dir / CRG_DATA_DIR / CRG_REPO_ROOT (#155)."""
