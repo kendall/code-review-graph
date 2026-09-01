@@ -396,6 +396,34 @@ def _should_ignore(path: str, patterns: list[str]) -> bool:
     return False
 
 
+def _dir_is_ignored(rel_dir: str, patterns: list[str]) -> bool:
+    """True if a directory (repo-relative, posix-style, "" for the root)
+    should never receive an inotify watch — i.e. everything under it is
+    covered by an ignore pattern (e.g. a nested git worktree)."""
+    probe = "__probe__" if rel_dir in ("", ".") else f"{rel_dir}/__probe__"
+    return _should_ignore(probe, patterns)
+
+
+def _iter_watchable_dirs(repo_root: Path, patterns: list[str]) -> list[Path]:
+    """Directories under repo_root to inotify-watch, pruning ignored
+    subtrees (e.g. nested git worktrees) before descending into them so
+    they never consume a watch descriptor. watchdog's recursive scheduling
+    has no ignore-pattern awareness and would otherwise inotify-watch
+    every directory in an ignored subtree."""
+    dirs = [repo_root]
+    for dirpath, dirnames, _filenames in os.walk(repo_root):
+        rel_dir = str(PurePosixPath(Path(dirpath).relative_to(repo_root)))
+        kept = []
+        for name in dirnames:
+            rel_child = name if rel_dir == "." else f"{rel_dir}/{name}"
+            if _dir_is_ignored(rel_child, patterns):
+                continue
+            kept.append(name)
+            dirs.append(Path(dirpath) / name)
+        dirnames[:] = kept
+    return dirs
+
+
 def _is_binary(path: Path) -> bool:
     """Quick heuristic: check if file appears to be binary."""
     try:
@@ -1121,6 +1149,17 @@ def watch(
 
         def on_created(self, event):
             if event.is_directory:
+                # Directories are scheduled non-recursively (see watch()),
+                # so a newly created one needs its own watch — unless it
+                # falls in an ignored subtree (e.g. a new git worktree).
+                try:
+                    rel = str(
+                        PurePosixPath(Path(event.src_path).relative_to(repo_root))
+                    )
+                except ValueError:
+                    return
+                if not _dir_is_ignored(rel, ignore_patterns):
+                    observer.schedule(handler, event.src_path, recursive=False)
                 return
             if self._should_handle(event.src_path):
                 self._schedule(event.src_path)
@@ -1198,7 +1237,12 @@ def watch(
 
     handler = GraphUpdateHandler()
     observer = Observer()
-    observer.schedule(handler, str(repo_root), recursive=True)
+    # Non-recursive, one schedule per surviving directory: watchdog's
+    # recursive=True has no ignore-pattern awareness and would otherwise
+    # inotify-watch every directory in an ignored subtree (e.g. hundreds
+    # of nested git worktrees), easily exhausting the OS watch quota.
+    for watched_dir in _iter_watchable_dirs(repo_root, ignore_patterns):
+        observer.schedule(handler, str(watched_dir), recursive=False)
     observer.start()
 
     logger.info("Watching %s for changes... (Ctrl+C to stop)", repo_root)

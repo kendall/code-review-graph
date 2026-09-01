@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch  # noqa: F401 – patch used in tests
 from code_review_graph.graph import GraphStore
 from code_review_graph.incremental import (
     _is_binary,
+    _iter_watchable_dirs,
     _load_ignore_patterns,
     _parse_single_file,
     _should_ignore,
@@ -258,6 +259,27 @@ class TestIgnorePatterns:
         # Sibling paths that merely share a prefix must still be watched.
         assert not _should_ignore(".claude/worktrees.md", patterns)
         assert not _should_ignore("src/worktrees/helper.py", patterns)
+
+    def test_iter_watchable_dirs_prunes_nested_worktrees(self, tmp_path):
+        """The recursive walk that decides what to inotify-watch must never
+        descend into a nested worktree — ignore patterns alone don't stop
+        watchdog's own recursive=True from walking (and watching) them."""
+        from code_review_graph.incremental import DEFAULT_IGNORE_PATTERNS
+
+        repo = tmp_path / "repo"
+        (repo / "src").mkdir(parents=True)
+        (repo / "src" / "main.py").touch()
+        worktree = repo / ".claude" / "worktrees" / "some-slug"
+        (worktree / "src").mkdir(parents=True)
+        (worktree / "src" / "main.py").touch()
+
+        dirs = _iter_watchable_dirs(repo, DEFAULT_IGNORE_PATTERNS)
+
+        assert repo / "src" in dirs
+        assert not any(worktree == d or worktree in d.parents for d in dirs)
+        # Pruned before descending — os.walk never yielded the worktree's
+        # own subdirectories to prune in the first place.
+        assert repo / ".claude" / "worktrees" not in dirs
 
 
 class TestDataDir:
