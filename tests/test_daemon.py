@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -349,6 +351,50 @@ class TestWatchDaemon:
         finally:
             daemon.stop()
 
+    def test_start_does_not_block_on_missing_graph(self, daemon_env):
+        """A repo needing an initial build must not block start(), and must
+        not block another repo's watcher (that already has a graph) from
+        starting immediately."""
+        daemon = daemon_env["daemon"]
+        beta_db = daemon_env["repo_b"] / ".code-review-graph" / "graph.db"
+        beta_db.unlink()
+
+        build_started = threading.Event()
+        release_build = threading.Event()
+
+        def slow_build(*_args, **_kwargs):
+            build_started.set()
+            release_build.wait(timeout=5)
+            return MagicMock(returncode=0)
+
+        with (
+            patch("code_review_graph.daemon.subprocess.Popen") as mock_popen,
+            patch("code_review_graph.daemon.subprocess.run", side_effect=slow_build) as mock_run,
+            patch("code_review_graph.registry.Registry"),
+        ):
+            mock_proc = MagicMock()
+            mock_proc.pid = 1
+            mock_proc.poll.return_value = None
+            mock_popen.return_value = mock_proc
+
+            started = time.monotonic()
+            daemon.start()
+            elapsed = time.monotonic() - started
+
+            try:
+                assert elapsed < 2, "start() waited on beta's build"
+                assert "alpha" in daemon._children  # already had a graph
+                assert "beta" not in daemon._children  # build still in flight
+                assert build_started.wait(timeout=2)
+                assert mock_run.call_count == 1
+            finally:
+                release_build.set()
+                daemon._get_build_executor().shutdown(wait=True)
+
+            # beta's watcher starts once its background build finishes.
+            assert "beta" in daemon._children
+        daemon.stop()
+
     @patch("code_review_graph.daemon.subprocess.Popen")
     @patch("code_review_graph.registry.Registry")
     def test_start_registers_repos(self, mock_registry_cls, mock_popen, daemon_env):
@@ -400,6 +446,8 @@ class TestWatchDaemon:
 
             # Reconcile with full config (alpha + beta)
             daemon.reconcile(config)
+            # beta's build runs on the background pool; drain it before asserting.
+            daemon._get_build_executor().shutdown(wait=True)
 
             # beta should have been registered in the registry
             mock_registry.register.assert_called_once_with(config.repos[1].path, alias="beta")
@@ -543,6 +591,8 @@ class TestWatchDaemon:
             mock_registry = mock_registry_cls.return_value
 
             daemon.reconcile(updated_config)
+            # alpha's build runs on the background pool; drain it before asserting.
+            daemon._get_build_executor().shutdown(wait=True)
 
             # alpha should be registered at the new path
             mock_registry.register.assert_called_once_with(str(new_repo), alias="alpha")
