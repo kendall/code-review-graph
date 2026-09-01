@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch  # noqa: F401 – patch used in tests
 from code_review_graph.graph import GraphStore
 from code_review_graph.incremental import (
     _is_binary,
+    _iter_watch_roots,
     _load_ignore_patterns,
     _parse_single_file,
     _should_ignore,
@@ -241,6 +242,70 @@ class TestIgnorePatterns:
         # Coverage/cache
         assert _should_ignore("coverage/lcov.info", patterns)
         assert _should_ignore(".cache/webpack/index.pack", patterns)
+
+    def test_should_ignore_nested_worktrees(self):
+        """Nested git worktrees under the repo root are a separate,
+        separately-watched repo — walking into them here duplicates every
+        file per worktree and can exhaust the inotify watch quota."""
+        from code_review_graph.incremental import DEFAULT_IGNORE_PATTERNS
+
+        patterns = DEFAULT_IGNORE_PATTERNS
+        assert _should_ignore(
+            ".claude/worktrees/some-slug/src/main.py", patterns
+        )
+        assert _should_ignore(
+            ".codex/worktrees/codex-wb-20260901-000000-1/zig/core.zig", patterns
+        )
+        # Sibling paths that merely share a prefix must still be watched.
+        assert not _should_ignore(".claude/worktrees.md", patterns)
+        assert not _should_ignore("src/worktrees/helper.py", patterns)
+
+    def test_iter_watch_roots_clean_tree_is_one_recursive_root(self, tmp_path):
+        """A tree with nothing to exclude needs exactly one schedule() call
+        — splitting it up would waste inotify instances for no reason."""
+        from code_review_graph.incremental import DEFAULT_IGNORE_PATTERNS
+
+        repo = tmp_path / "repo"
+        (repo / "src" / "sub").mkdir(parents=True)
+        (repo / "src" / "sub" / "main.py").touch()
+
+        roots = _iter_watch_roots(repo, DEFAULT_IGNORE_PATTERNS)
+
+        assert roots == [(repo, True)]
+
+    def test_iter_watch_roots_excludes_nested_worktree(self, tmp_path):
+        """Nothing returned may cover a nested worktree, and the fix must
+        not regress into one schedule() call per surviving directory —
+        watchdog opens a new inotify *instance* per call
+        (fs.inotify.max_user_instances), a much scarcer resource than
+        watch descriptors, so an ordinary repo's directory count (easily
+        1000+) must not become the schedule() call count."""
+        from code_review_graph.incremental import DEFAULT_IGNORE_PATTERNS
+
+        repo = tmp_path / "repo"
+        (repo / "src" / "sub").mkdir(parents=True)
+        (repo / "src" / "sub" / "main.py").touch()
+        (repo / "docs").mkdir()
+        worktree = repo / ".claude" / "worktrees" / "some-slug"
+        (worktree / "src").mkdir(parents=True)
+        (worktree / "src" / "main.py").touch()
+
+        roots = _iter_watch_roots(repo, DEFAULT_IGNORE_PATTERNS)
+
+        for path, _recursive in roots:
+            assert worktree != path and worktree not in path.parents
+
+        # src/ and docs/ have nothing ignored below them — one recursive
+        # schedule each, not one per subdirectory.
+        assert (repo / "src", True) in roots
+        assert (repo / "docs", True) in roots
+        assert not any(p == repo / "src" / "sub" for p, _ in roots)
+
+        # Only repo and .claude (ancestors of the ignored dir) needed
+        # splitting into a non-recursive self-watch.
+        split_points = {p for p, recursive in roots if not recursive}
+        assert split_points == {repo, repo / ".claude"}
+        assert len(roots) < 10
 
 
 class TestDataDir:

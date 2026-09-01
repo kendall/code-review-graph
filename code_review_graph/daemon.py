@@ -20,6 +20,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -42,6 +43,9 @@ CONFIG_PATH: Path = Path.home() / ".code-review-graph" / "watch.toml"
 PID_PATH: Path = Path.home() / ".code-review-graph" / "daemon.pid"
 STATE_PATH: Path = Path.home() / ".code-review-graph" / "daemon-state.json"
 _HEALTH_CHECK_INTERVAL = 30
+# Bounded, not one thread per repo: a daemon with dozens of never-built
+# repos must not fork that many concurrent full parses at once.
+_BUILD_WORKERS = 4
 
 # ---------------------------------------------------------------------------
 # Dataclasses
@@ -499,6 +503,11 @@ class WatchDaemon:
         self._health_thread: threading.Thread | None = None
         self._health_stop: threading.Event = threading.Event()
         self._lock: threading.Lock = threading.Lock()
+        # Aliases with an initial build in flight on _build_executor — the
+        # health checker must not treat these as dead watchers.
+        self._building: set[str] = set()
+        self._build_executor: ThreadPoolExecutor | None = None
+        self._stopping: bool = False
 
     # ------------------------------------------------------------------
     # Public interface
@@ -515,18 +524,18 @@ class WatchDaemon:
         for repo in self._config.repos:
             registry.register(repo.path, alias=repo.alias)
 
-        # Build initial graph for repos that lack a database
-        for repo in self._config.repos:
-            db_path = Path(repo.path) / ".code-review-graph" / "graph.db"
-            if not db_path.exists():
-                self._initial_build(repo)
-
-        # Spawn a watcher child for every repo
-        for repo in self._config.repos:
-            self._start_watcher(repo)
-
-        # Track current state
+        # Desired state up front — a repo whose build is still in flight
+        # must never look "unconfigured" to reconcile() or the health
+        # checker (see _building).
         self._current_repos = {r.alias: r for r in self._config.repos}
+
+        # Repos that already have a graph get a watcher immediately. Repos
+        # that don't build on a small bounded pool instead of one at a
+        # time on this thread — a handful of never-built repos must not
+        # block every other repo's watcher (or daemon startup itself)
+        # behind a serial rebuild queue.
+        for repo in self._config.repos:
+            self._start_or_schedule_build(repo)
 
         # Persist child PIDs to disk for cross-process status queries
         self._save_state()
@@ -547,9 +556,16 @@ class WatchDaemon:
         self.stop_health_checker()
 
         with self._lock:
+            self._stopping = True
             for alias, proc in list(self._children.items()):
                 self._terminate_child(alias, proc)
             self._children.clear()
+
+        if self._build_executor is not None:
+            # Queued (not-yet-started) builds are dropped. A build already
+            # running finishes its subprocess regardless, then sees
+            # _stopping and skips starting a watcher — see _build_then_watch.
+            self._build_executor.shutdown(wait=False, cancel_futures=True)
 
         self._current_repos.clear()
         self._clear_state()
@@ -577,23 +593,14 @@ class WatchDaemon:
             if desired[alias].path != self._current_repos[alias].path
         }
 
-        # Register new/updated repos and build graphs *before* acquiring
-        # the lock so that long-running builds don't block health checks.
+        # Register new/updated repos in the central registry.
         if to_add or to_update:
             from .registry import Registry
 
             registry = Registry()
-
-            repos_needing_build: list[WatchRepo] = []
             for alias in to_add | to_update:
                 repo = desired[alias]
                 registry.register(repo.path, alias=repo.alias)
-                db_path = Path(repo.path) / ".code-review-graph" / "graph.db"
-                if not db_path.exists():
-                    repos_needing_build.append(repo)
-
-            for repo in repos_needing_build:
-                self._initial_build(repo)
 
         with self._lock:
             # Remove stale watchers
@@ -602,21 +609,26 @@ class WatchDaemon:
                 if proc is not None:
                     self._terminate_child(alias, proc)
                 del self._current_repos[alias]
+                self._building.discard(alias)
 
-            # Add new watchers
-            for alias in to_add:
-                repo = desired[alias]
-                self._start_watcher(repo)
-                self._current_repos[alias] = repo
-
-            # Update changed watchers (path changed for same alias)
+            # Stop watchers whose path changed; the new watcher (built if
+            # needed) is (re)started below, outside the lock.
             for alias in to_update:
                 proc = self._children.pop(alias, None)
                 if proc is not None:
                     self._terminate_child(alias, proc)
-                repo = desired[alias]
-                self._start_watcher(repo)
-                self._current_repos[alias] = repo
+
+            # Desired state up front for the same reason as start(): a repo
+            # whose build is still in flight must not look "unconfigured".
+            for alias in to_add | to_update:
+                self._current_repos[alias] = desired[alias]
+
+        # Outside the lock — see _start_or_schedule_build. Repos with an
+        # existing graph get a watcher immediately; repos without one build
+        # on the bounded pool so N new repos never serialize behind each
+        # other, mirroring start().
+        for alias in to_add | to_update:
+            self._start_or_schedule_build(desired[alias])
 
         # Persist updated state
         self._save_state()
@@ -742,6 +754,8 @@ class WatchDaemon:
         restarted = False
         with self._lock:
             for alias, repo in list(self._current_repos.items()):
+                if alias in self._building:
+                    continue  # initial build still in flight, not dead
                 proc = self._children.get(alias)
                 if proc is None or proc.poll() is not None:
                     logger.warning("Watcher for '%s' is dead — restarting", alias)
@@ -870,6 +884,41 @@ class WatchDaemon:
             self._state_path.unlink(missing_ok=True)
         except OSError:
             pass
+
+    def _get_build_executor(self) -> ThreadPoolExecutor:
+        """Lazily create the bounded pool that runs initial graph builds."""
+        if self._build_executor is None:
+            self._build_executor = ThreadPoolExecutor(
+                max_workers=_BUILD_WORKERS, thread_name_prefix="crg-build"
+            )
+        return self._build_executor
+
+    def _start_or_schedule_build(self, repo: WatchRepo) -> None:
+        """Start *repo*'s watcher now if its graph exists; otherwise build it
+        on the background pool and start the watcher once the build finishes.
+
+        Must be called with ``self._lock`` NOT held (it acquires it itself,
+        directly or via the background task).
+        """
+        db_path = Path(repo.path) / ".code-review-graph" / "graph.db"
+        if db_path.exists():
+            with self._lock:
+                self._start_watcher(repo)
+            return
+
+        with self._lock:
+            self._building.add(repo.alias)
+        self._get_build_executor().submit(self._build_then_watch, repo)
+
+    def _build_then_watch(self, repo: WatchRepo) -> None:
+        """Background-pool task: run the one-off build, then start the watcher."""
+        self._initial_build(repo)
+        with self._lock:
+            self._building.discard(repo.alias)
+            if self._stopping or repo.alias not in self._current_repos:
+                return
+            self._start_watcher(repo)
+        self._save_state()
 
     def _start_watcher(self, repo: WatchRepo) -> None:
         """Spawn a child process running ``code-review-graph watch`` for *repo*."""

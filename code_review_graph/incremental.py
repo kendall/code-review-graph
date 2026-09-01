@@ -100,6 +100,11 @@ def _run_temporal_resolver(store: GraphStore) -> Optional[dict]:
 # inside monorepos. See: #91
 DEFAULT_IGNORE_PATTERNS = [
     ".code-review-graph/**",
+    # Nested git worktrees are a separate repo, watched/built on their own —
+    # walking into them here duplicates every file per worktree and can
+    # exhaust the OS inotify watch quota when many worktrees exist.
+    ".claude/worktrees/**",
+    ".codex/worktrees/**",
     "node_modules/**",
     ".git/**",
     ".svn/**",
@@ -389,6 +394,79 @@ def _should_ignore(path: str, patterns: list[str]) -> bool:
         if prefix in parts:
             return True
     return False
+
+
+def _dir_is_ignored(rel_dir: str, patterns: list[str]) -> bool:
+    """True if a directory (repo-relative, posix-style, "" for the root)
+    should never receive an inotify watch — i.e. everything under it is
+    covered by an ignore pattern (e.g. a nested git worktree)."""
+    probe = "__probe__" if rel_dir in ("", ".") else f"{rel_dir}/__probe__"
+    return _should_ignore(probe, patterns)
+
+
+def _find_ignored_dirs(repo_root: Path, patterns: list[str]) -> set[str]:
+    """Repo-relative (posix) paths of directories that themselves match an
+    ignore pattern — the boundary of every ignored subtree (e.g. a nested
+    git worktree), found without descending into any of them."""
+    ignored: set[str] = set()
+    for dirpath, dirnames, _filenames in os.walk(repo_root):
+        rel_dir = str(PurePosixPath(Path(dirpath).relative_to(repo_root)))
+        rel_dir = "" if rel_dir == "." else rel_dir
+        kept = []
+        for name in dirnames:
+            rel_child = name if rel_dir == "" else f"{rel_dir}/{name}"
+            if _dir_is_ignored(rel_child, patterns):
+                ignored.add(rel_child)
+            else:
+                kept.append(name)
+        dirnames[:] = kept
+    return ignored
+
+
+def _iter_watch_roots(repo_root: Path, patterns: list[str]) -> list[tuple[Path, bool]]:
+    """(path, recursive) pairs to pass to ``Observer.schedule`` so that
+    ignored subtrees (e.g. nested git worktrees) are excluded from
+    watching, using as FEW schedule() calls as possible.
+
+    Each schedule() call opens its own inotify instance
+    (fs.inotify.max_user_instances) — a resource that is far scarcer than
+    individual watch descriptors (fs.inotify.max_user_watches). A naive
+    "one non-recursive watch per surviving directory" approach can exhaust
+    the instance quota on an ordinary repo (~1000+ directories) even
+    though the watch-descriptor count stays tiny. A directory whose whole
+    subtree is clean gets ONE recursive=True schedule instead; only a
+    directory that actually has an ignored descendant is split into a
+    non-recursive watch on itself plus independent recursion per clean
+    child, so splitting is bounded by how many ignored subtrees exist and
+    how deep they are, not by total repo size.
+    """
+    ignored = _find_ignored_dirs(repo_root, patterns)
+    if not ignored:
+        return [(repo_root, True)]
+
+    def has_ignored_below(rel: str) -> bool:
+        prefix = f"{rel}/" if rel else ""
+        return any(d.startswith(prefix) for d in ignored)
+
+    roots: list[tuple[Path, bool]] = []
+
+    def visit(dir_: Path, rel: str) -> None:
+        if not has_ignored_below(rel):
+            roots.append((dir_, True))
+            return
+        roots.append((dir_, False))
+        try:
+            children = sorted(p for p in dir_.iterdir() if p.is_dir())
+        except OSError:
+            return
+        for child in children:
+            rel_child = child.name if rel == "" else f"{rel}/{child.name}"
+            if rel_child in ignored:
+                continue
+            visit(child, rel_child)
+
+    visit(repo_root, "")
+    return roots
 
 
 def _is_binary(path: Path) -> bool:
@@ -1116,6 +1194,19 @@ def watch(
 
         def on_created(self, event):
             if event.is_directory:
+                # A directory outside any already-recursively-watched root
+                # needs its own watch — unless it falls in an ignored
+                # subtree (e.g. a new git worktree). recursive=True since a
+                # freshly created directory is assumed clean; see
+                # _iter_watch_roots for why instance count matters here.
+                try:
+                    rel = str(
+                        PurePosixPath(Path(event.src_path).relative_to(repo_root))
+                    )
+                except ValueError:
+                    return
+                if not _dir_is_ignored(rel, ignore_patterns):
+                    observer.schedule(handler, event.src_path, recursive=True)
                 return
             if self._should_handle(event.src_path):
                 self._schedule(event.src_path)
@@ -1193,7 +1284,13 @@ def watch(
 
     handler = GraphUpdateHandler()
     observer = Observer()
-    observer.schedule(handler, str(repo_root), recursive=True)
+    # See _iter_watch_roots: schedule the fewest recursive watches that
+    # still exclude ignored subtrees (e.g. nested git worktrees), instead
+    # of one call per directory — each schedule() call opens its own
+    # inotify instance, and that quota is far smaller than the watch-
+    # descriptor quota.
+    for watch_dir, recursive in _iter_watch_roots(repo_root, ignore_patterns):
+        observer.schedule(handler, str(watch_dir), recursive=recursive)
     observer.start()
 
     logger.info("Watching %s for changes... (Ctrl+C to stop)", repo_root)
