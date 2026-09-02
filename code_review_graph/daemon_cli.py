@@ -38,11 +38,11 @@ def _handle_start(args: argparse.Namespace) -> None:
 
     config = load_config()
     daemon = WatchDaemon(config=config)
-    daemon.start()
 
     if not args.foreground:
         daemon.daemonize()
 
+    daemon.start()
     daemon.run_forever()
 
 
