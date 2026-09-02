@@ -939,6 +939,36 @@ class TestDaemonCLI:
 
         assert exc_info.value.code == 1
 
+    def test_handle_start_daemonizes_before_starting_managed_resources(self):
+        """Watchers and threads must be created by the final daemon process."""
+        from code_review_graph.daemon_cli import _handle_start
+
+        args = MagicMock()
+        args.foreground = False
+        events: list[str] = []
+        daemon = MagicMock()
+        daemon.daemonize.side_effect = lambda: events.append("daemonize")
+        daemon.start.side_effect = lambda: events.append("start")
+        daemon.run_forever.side_effect = lambda: events.append("run_forever")
+
+        with (
+            patch(
+                "code_review_graph.daemon.is_daemon_running",
+                return_value=False,
+            ),
+            patch(
+                "code_review_graph.daemon.load_config",
+                return_value=DaemonConfig(),
+            ),
+            patch(
+                "code_review_graph.daemon.WatchDaemon",
+                return_value=daemon,
+            ),
+        ):
+            _handle_start(args)
+
+        assert events == ["daemonize", "start", "run_forever"]
+
     def test_handle_logs_missing_file(self, tmp_path):
         """_handle_logs exits when log file does not exist."""
         from code_review_graph.daemon_cli import _handle_logs
