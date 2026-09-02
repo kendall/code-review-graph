@@ -330,6 +330,22 @@ class TestWatchDaemon:
             "config_file": config_file,
         }
 
+    def test_daemonize_parent_exits_without_interpreter_cleanup(self, daemon_env):
+        """Fork parents must not run Python shutdown hooks or wait on threads."""
+
+        class ParentExited(Exception):
+            pass
+
+        daemon = daemon_env["daemon"]
+        with (
+            patch("code_review_graph.daemon.os.fork", return_value=123),
+            patch("code_review_graph.daemon.os._exit", side_effect=ParentExited) as immediate_exit,
+            pytest.raises(ParentExited),
+        ):
+            daemon.daemonize()
+
+        immediate_exit.assert_called_once_with(0)
+
     @patch("code_review_graph.daemon.subprocess.Popen")
     @patch("code_review_graph.registry.Registry")
     def test_start_spawns_children(self, mock_registry_cls, mock_popen, daemon_env):

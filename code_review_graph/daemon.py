@@ -788,8 +788,9 @@ class WatchDaemon:
         # First fork
         pid = os.fork()
         if pid > 0:
-            # Parent exits
-            sys.exit(0)
+            # Do not run interpreter shutdown hooks in a fork parent. Imported
+            # libraries may own threads whose cleanup can block indefinitely.
+            os._exit(0)
 
         # Become session leader
         os.setsid()
@@ -797,7 +798,7 @@ class WatchDaemon:
         # Second fork (prevent acquiring a controlling terminal)
         pid = os.fork()
         if pid > 0:
-            sys.exit(0)
+            os._exit(0)
 
         # Redirect file descriptors
         sys.stdout.flush()
